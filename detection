@@ -1,0 +1,117 @@
+# Import necessary libraries
+import os
+import numpy as np
+import cv2
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import Xception
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import classification_report, accuracy_score
+
+  # Parameters
+IMG_SIZE = 299  # Image size for Xception
+BATCH_SIZE = 32
+EPOCHS = 20
+LEARNING_RATE = 0.0001
+
+  # Path to dataset (Assuming two folders: 'Forged' and 'Original')
+DATASET_PATH = '/content/drive/MyDrive/data'
+
+  # Function to load and preprocess images
+def load_images(dataset_path, img_size):
+    images = []
+    labels = []
+
+    for category in ['Forged', 'Original']:
+        folder_path = os.path.join(dataset_path, category)
+        for img_name in os.listdir(folder_path):
+            img_path = os.path.join(folder_path, img_name)
+            # Load the image and convert to grayscale
+            img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            img = cv2.resize(img, (img_size, img_size))
+            # Convert grayscale image to 3-channel image (to use pre-trained Xception)
+            img = np.stack((img,) * 3, axis=-1)
+            images.append(img)
+            labels.append(category)
+
+    return np.array(images), np.array(labels)
+
+  # Load and preprocess the images
+X, y = load_images(DATASET_PATH, IMG_SIZE)
+
+  # Normalize the pixel values to the range [0, 1]
+X = X / 255.0
+
+  # Encode the labels ('Forged' -> 0, 'Original' -> 1)
+label_encoder = LabelEncoder()
+y_encoded = label_encoder.fit_transform(y)
+
+  # Split the data into train and test sets
+X_train, X_test, y_train, y_test = train_test_split(X, y_encoded, test_size=0.2, random_state=42)
+
+  # Data Augmentation for training images
+datagen = ImageDataGenerator(
+    rotation_range=20,
+    zoom_range=0.2,
+    width_shift_range=0.1,
+    height_shift_range=0.1,
+    horizontal_flip=True
+)
+
+  # Load Xception model pre-trained on ImageNet without the top layers
+xception_base = Xception(weights='imagenet', include_top=False, input_shape=(IMG_SIZE, IMG_SIZE, 3))
+
+  # Add custom layers on top of Xception
+x = xception_base.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(1024, activation='relu')(x)
+x = Dense(512, activation='relu')(x)
+predictions = Dense(1, activation='sigmoid')(x)
+
+  # Define the final model
+model = Model(inputs=xception_base.input, outputs=predictions)
+
+  # Freeze the layers of Xception except the top layers
+for layer in xception_base.layers:
+    layer.trainable = False
+
+  # Compile the model
+model.compile(optimizer=Adam(learning_rate=LEARNING_RATE), loss='binary_crossentropy', metrics=['accuracy'])
+
+  # Train the model
+history = model.fit(
+    datagen.flow(X_train, y_train, batch_size=BATCH_SIZE),
+    validation_data=(X_test, y_test),
+    epochs=EPOCHS
+)
+
+  # Evaluate the model
+y_pred = (model.predict(X_test) > 0.5).astype("int32")
+print(f"Test Accuracy: {accuracy_score(y_test, y_pred)}")
+print(classification_report(y_test, y_pred, target_names=label_encoder.classes_))
+
+  # Prediction on new/unknown data
+def predict_image(image_path):
+    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+    img = cv2.resize(img, (IMG_SIZE, IMG_SIZE))
+    # Convert grayscale image to 3-channel image (as Xception expects 3 channels)
+    img = np.stack((img,) * 3, axis=-1)
+    img = np.expand_dims(img, axis=0)  # Add batch dimension
+    img = img / 255.0  # Normalize
+
+    prediction = model.predict(img)
+    label = 'Original' if prediction < 0.5 else 'Forged'
+    return label
+
+# Example prediction on an unknown image
+unknown_image_path = 'hasna.jpg'
+prediction = predict_image(unknown_image_path)
+print(f"The predicted class for the image is: {prediction}")
+
+
+  
+
+  
